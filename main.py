@@ -93,7 +93,7 @@ def main():
         # recurse back in time until only duplicates are found
         duplicates = 0
         while len(activities) != duplicates:
-            inserted, duplicates = mdbfit.upload_strava(db["strava"], activities)
+            inserted, duplicates = mdbfit.upload_strava(db, activities)
             inserted_strava_activities +=  inserted
             before -= timespan_delta
             after -= timespan_delta
@@ -105,7 +105,7 @@ def main():
         polar = mdbfit.Polar()
         steps_data = polar.get_steps()
         if steps_data:
-            inserted_polar_dates, updated_polar_steps = mdbfit.upload_polar(db["polar"], steps_data)
+            inserted_polar_dates, updated_polar_steps = mdbfit.upload_polar(db, steps_data)
             logger.info(f"inserted {inserted_polar_dates} new dates and updated {updated_polar_steps} dates from Polar")
 
 if __name__ == "__main__":
