@@ -166,9 +166,6 @@ class Polar:
                 include_client_id=False
             )
             self.user_id = self._session.token["x_user_id"]
-
-            if not token:
-                self.logger.critical("authentication failed.")
             # register (only required first time)
             register_response = self._session.post("https://www.polaraccesslink.com/v3/users",
                                                    json={"member-id": self.user_id})
@@ -178,6 +175,9 @@ class Polar:
                 self.logger.debug("user already registered, but that's fine")
             else:
                 self.logger.debug(f"unexpected response when registering user: {register_response.status_code}")
+
+            if not token:
+                self.logger.critical("authentication failed.")
 
         else:
             self.logger.debug("using previous token to initialize OAuth2Session")
@@ -222,50 +222,37 @@ class Polar:
             json.dump(token, fp)
 
     def get_steps(self):
-        steps = {}  # {date: steps}
+        steps = {}  # {date: {steps: steps, created: created}}
         transaction_response = self._session.post(
             f"https://www.polaraccesslink.com/v3/users/{self.user_id}/activity-transactions"
         )
-        if transaction_response.status_code == 204:
-            self.logger.info("no new Polar daily activity data")
-        else:
-            transaction_response = transaction_response.json()
-            activities_response = self._session.get(transaction_response["resource-uri"])
-            activities_response.raise_for_status()
-            activities_response = activities_response.json()
-            self.logger.debug(f"found {len(activities_response['activity-log'])} new daily activity data")
-
-            steps = {}
-            for activity in activities_response["activity-log"]:
-                activity_response = self._session.get(activity)
+        if transaction_response.status_code == 201:
+            transaction_url = transaction_response.json()["resource-uri"]
+            activities = self._session.get(transaction_url).json()
+            for url in activities["activity-log"]:
+                activity_response = self._session.get(url)
                 if activity_response.status_code == 200:
-                    activity_response = activity_response.json()
-                elif activity_response.status_code == 204:
-                    self.logger.debug(f"received status code 204, no data available")
-                    return steps
-                else:
-                    activity_response.raise_for_status()
+                    activity_dict = activity_response.json()
+                    temp_steps = activity_dict["active-steps"]
+                    date = datetime.datetime.strptime(activity_dict["date"], "%Y-%m-%d")
+                    created = datetime.datetime.strptime(activity_dict["created"], "%Y-%m-%dT%H:%M:%S.%f")
 
-                date = activity_response["date"]
-                temp_steps = activity_response["active-steps"]
-
-                # check if greater than last update for this day and if so, update it
-                if (date in steps) and (temp_steps > steps[date]):
-                    steps[date] = temp_steps
-                    self.logger.debug(f"updated daily activity data: "
-                                      f"{date} | {temp_steps}")
-                elif date in steps:
-                    self.logger.debug(f"will not update steps for {date} because {temp_steps} is smaller than current"
-                                      f" steps for that day ({steps[date]})")
-                else:
-                    steps[date] = temp_steps
-                    self.logger.debug(f"added daily activity data: {date} | {temp_steps}")
-
-                commit = self._session.put(
-                    f"https://www.polaraccesslink.com/v3/users/{self.user_id}/activity-transactions/"
-                    f"{activity_response['transaction-id']}"
-                )
-                commit.raise_for_status()
-
-            self.logger.info(f"retrieved {len(steps)} daily step data points from Polar")
+                    # check if greater than last update for this day and if so, update it
+                    if (date in steps) and (temp_steps > steps[date]["steps"]):
+                        steps[date]["steps"] = temp_steps
+                        self.logger.debug(f"updated daily activity data: "
+                                          f"{date} | {temp_steps}")
+                    elif date in steps:
+                        self.logger.debug(
+                            f"will not update steps for {date} because {temp_steps} is smaller than current"
+                            f" steps for that day ({steps[date]})")
+                    else:
+                        steps[date] = {"steps": temp_steps, "created": created}
+                        self.logger.debug(f"added daily activity data: {date} | steps: {temp_steps} | created: {created}")
+            # commit transaction
+            self._session.put(transaction_url)
+        elif transaction_response.status_code == 204:
+            self.logger.debug("status code 204, no new polar data")
+        else:
+            transaction_response.raise_for_status()
         return steps

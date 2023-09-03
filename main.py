@@ -5,10 +5,15 @@ import mdbfit
 import pymongo
 from dotenv import load_dotenv
 import argparse
+import time
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Sync Strava and Polar data to MongoDB.")
+    
+    parser.add_argument("--strava", help="sync Strava", action="store_true")
+    parser.add_argument("--polar", help="sync Polar", action="store_true")
+    parser.add_argument("--history", nargs=1, type=str, help="historical sync with Strava from HISTORY date in YYYY-MM-dd format")
     parser.add_argument("--verbose", help="increase verbosity, turns logging output level to debug",
                         action="store_true")
     args = parser.parse_args()
@@ -17,17 +22,16 @@ def main():
         level = logging.DEBUG
     else:
         level = logging.INFO
+    logging.basicConfig(format="%(asctime)s -- %(name)s -- [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)")
+    logger = logging.getLogger()
 
     load_dotenv()
     uri = os.environ.get("CONNECTION_STRING")
     database = os.environ.get("DATABASE")
 
-    logging.basicConfig(format="%(asctime)s -- %(name)s -- [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)")
-    logger = logging.getLogger()
     logger.setLevel(level)
 
-    strava = mdbfit.Strava(level=level)
-    polar = mdbfit.Polar(level=level)
+    # setup relevant OAuth2 sessions
     client = pymongo.MongoClient(uri)
 
     try:
@@ -37,70 +41,72 @@ def main():
         logging.critical(e)
     db = client[database]
 
-    # insert activities from Strava, recurse backwards until no new activities are found
-    total_inserted_activities = 0
-    today = datetime.datetime.today()
-    timespan_delta = datetime.timedelta(weeks=10)  # longest gap of no-data
+    if args.history:
+        strava = mdbfit.Strava()
+        history = datetime.datetime.strptime(args.history[0], "%Y-%m-%d")
+        today = datetime.datetime.now()
+        logger.info(f"initiating Strava sync from {history.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')}")
 
-    before = today
-    after = today - timespan_delta
+        inserted_strava_activities = 0
+        timespan_delta = datetime.timedelta(days=15)
+        after = today - timespan_delta
+        before = today
 
-    inserted_activities = 1
-    while inserted_activities > 0:
-        logger.debug(f"looking for Strava activities from "
-                     f"{after.strftime('%Y-%m-%d')} to {before.strftime('%Y-%m-%d')}")
-        inserted_activities = 0
-        activities = strava.get_activities(before=before.timestamp(), after=after.timestamp())
-        logger.debug(f"received {len(activities)} activities from Strava")
-        if activities:
-            for activity in activities:
-                if not db["strava"].find_one({"id": activity["id"]}):
-                    db["strava"].insert_one(activity)
-                    inserted_activities += 1
-                    logger.debug(f"inserted Strava activity with id {activity['id']}")
-                    total_inserted_activities += 1
-                else:
-                    logger.debug(f"activity with id {activity['id']} exists in database, skipping upload")
-            logger.debug(f"inserted {inserted_activities} activities")
+        i = 1
+        while before > history:
+            logger.debug(f"looking for Strava activities between {after.strftime('%Y-%m-%d')} - {before.strftime('%Y-%m-%d')}")
+            activities = strava.get_activities(before.timestamp(), after.timestamp())
+            logger.debug(f"found {len(activities)} activities")
+            inserted, _ = mdbfit.upload_strava(db, activities)
+            inserted_strava_activities += inserted
             before -= timespan_delta
             after -= timespan_delta
-        else:
-            inserted_activities = 0
+            i += 1
+            if i % 90 == 0:
+                logging.info("pausing for 15 mins to avoid hitting API rate limit")
+                time.sleep(15 * 60)
 
-    logger.info(f"uploaded a total of {total_inserted_activities} activities from Strava")
+        logger.info(f"inserted {inserted_strava_activities} activities from Strava")
+
+
+    # insert activities from Strava, recurse backwards until no new activities are found
+    if args.strava:
+        logger.info("syncing with Strava")
+        strava = mdbfit.Strava()
+
+        inserted_strava_activities = 0
+        today = datetime.datetime.today()
+        timespan_delta = datetime.timedelta(weeks=1)
+
+        before = today
+        after = today - timespan_delta
+        
+        # travel back in time until activities are found
+        activities = {}
+        while not activities:
+            logger.debug(f"looking for Strava activities between {after.strftime('%Y-%m-%d')} - {before.strftime('%Y-%m-%d')}")
+            activities = strava.get_activities(before.timestamp(), after.timestamp())
+            logger.debug(f"found {len(activities)} activities")
+            before -= timespan_delta
+            after -= timespan_delta
+        
+        # recurse back in time until only duplicates are found
+        duplicates = 0
+        while len(activities) != duplicates:
+            inserted, duplicates = mdbfit.upload_strava(db["strava"], activities)
+            inserted_strava_activities +=  inserted
+            before -= timespan_delta
+            after -= timespan_delta
+        logger.info(f"inserted {inserted_strava_activities} activities from Strava")
 
     # insert daily step data from Polar
-    steps = polar.get_steps()
-    if steps:
-        inserted_steps = 0
-        updated_steps = 0
-
-        for k in steps:
-            date = datetime.datetime.strptime(k, "%Y-%m-%d")
-            insert = {"date": date, "steps": steps[k], "updated": datetime.datetime.now()}
-            if not db["polar"].find_one({"date": date}):
-                # new date, so insert
-                db["polar"].insert_one(insert)
-                logger.debug(f"inserted {insert} to database")
-                inserted_steps += 1
-            else:
-                # check if new step data is larger, if so - update
-                document = db["polar"].find_one({"date": date})
-                db_steps = document["steps"]
-                if db_steps < steps[k]:
-                    db["polar"].update_one(
-                        {"date": date}, {"$set": {
-                            "steps": steps[k], "updated": datetime.datetime.now()}
-                        }
-                    )
-                    logger.debug(f"replaced {date} to {steps[k]} steps, previously had {db_steps} steps")
-                    updated_steps += 1
-
-                else:
-                    logger.debug(f"not inserting {date}, {date} already exists in database and has more steps. "
-                                 f"this shouldn't be happening")
-        logger.info(f"inserted {inserted_steps} new dates with steps data and replaced {updated_steps} date(s)")
-
+    if args.polar:
+        logger.debug("syncing with Polar")
+        polar = mdbfit.Polar()
+        steps_data = polar.get_steps()
+        if steps_data:
+            inserted_polar_dates, updated_polar_steps = mdbfit.upload_polar(db["polar"], steps_data)
+            logger.info(f"inserted {inserted_polar_dates} new dates and updated {updated_polar_steps} dates from Polar")
 
 if __name__ == "__main__":
     main()
