@@ -20,15 +20,12 @@ upload activities from Strava and daily steps from Polar to a MongoDB database.
     ```
     
     last two variables need to be set by you!
-4. Run `main.py` with your poetry environment. When running for the first time, pay attention to the output as it will provide a URL for authorization from both Strava and Polar. The first run may be long due if you have a lot of Strava activities.
-
-`main.py` assumes there is not a gap in Strava activities longer than 10 weeks. This should be modified to be more intelligent, but in the meantime you can also just change the `timespan_delta` variable in `main.py`.
-   
+4. Run `main.py -h` with your poetry environment to see available run arguments.
 
 ## Usage
 
 ```shell
-python main.py
+python main.py [-h] [--strava] [--polar] [--history HISTORY] [--verbose]
 ```
 
 ## Contributing
