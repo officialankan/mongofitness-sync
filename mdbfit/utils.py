@@ -27,7 +27,7 @@ def upload_polar(db: Database, response: dict) -> (int, int):
         created = response[date]["created"]
         steps = response[date]["steps"]
         insert = {"ts": date, "steps": steps, "meta": {"created": created}}
-        if not db["polar"].find_one({"date": date}):
+        if not db["polar"].find_one({"ts": date}):
             # new date, so insert
             db["polar"].insert_one(insert)
             logging.debug(f"inserted {insert} to database")
