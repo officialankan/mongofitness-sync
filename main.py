@@ -105,8 +105,8 @@ def main():
         polar = mdbfit.Polar()
         steps_data = polar.get_steps()
         if steps_data:
-            inserted_polar_dates, updated_polar_steps = mdbfit.upload_polar(db, steps_data)
-            logger.info(f"inserted {inserted_polar_dates} new dates and updated {updated_polar_steps} dates from Polar")
+            inserted_polar_dates = mdbfit.upload_polar(db, steps_data)
+            logger.info(f"inserted {inserted_polar_dates} new documents from Polar")
 
 if __name__ == "__main__":
     main()
