@@ -100,7 +100,7 @@ class Strava:
         """
         if not self._storage.parent.exists():
             self.logger.debug(f"creating storage {self._storage.parent}")
-            self._storage.parent.mkdir()
+            self._storage.parent.mkdir(parents=True)
         self.logger.debug(f"saving token to {self._storage}")
         with open(self._storage, mode="w") as fp:
             json.dump(token, fp)
@@ -216,7 +216,7 @@ class Polar:
         """
         if not self._storage.parent.exists():
             self.logger.debug(f"creating storage {self._storage.parent}")
-            self._storage.parent.mkdir()
+            self._storage.parent.mkdir(parents=True)
         self.logger.debug(f"saving token to {self._storage}")
         with open(self._storage, mode="w") as fp:
             json.dump(token, fp)
